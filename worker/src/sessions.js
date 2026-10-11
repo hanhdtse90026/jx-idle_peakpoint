@@ -117,7 +117,8 @@ async function create(env,acc,now,requestId,activity,mode,length){
   let revisionChecks='';for(const r of roster){values.push(r.id,r.sync_rev);revisionChecks+=` AND EXISTS(SELECT 1 FROM chars WHERE account_id=?${values.length-1} AND sync_rev=?${values.length})`;}
   // Trừ lượt trial bằng quotaClaimSQL: một statement nguyên tử (idem + đếm quota),
   // cùng transaction với câu tạo session nên hai request đồng thời không vượt quota.
-  const trialQuotaStmt=activity==='trial'?db.prepare(quotaClaimSQL(f=>({accountId:'?3',scope:'?11',period:'?12',idemKey:'?1',now:'?4',limit:'?13'}[f]))).bind(...values):null;
+  // D1 từ chối bind thừa: câu quota chỉ dùng ?1..?13, không được bind các tham số roster phía sau.
+  const trialQuotaStmt=activity==='trial'?db.prepare(quotaClaimSQL(f=>({accountId:'?3',scope:'?11',period:'?12',idemKey:'?1',now:'?4',limit:'?13'}[f]))).bind(...values.slice(0,13)):null;
   const statements=[...(trialQuotaStmt?[trialQuotaStmt]:[]),db.prepare(`INSERT INTO combat_sessions(id,room_id,creator_id,created_at,expires_at,state,status)
     SELECT ?1,?2,?3,?4,?5,?6,'active' FROM rooms r WHERE r.id=?2 AND r.owner_id=?3 AND r.status='open' AND r.expires_at>?4 AND r.mode=?10
     AND (SELECT COUNT(*) FROM room_members WHERE room_id=?2)=?7
