@@ -198,10 +198,11 @@ async function guildFor(db, accountId) {
 async function refreshGuildWeek(db, guildRow) {
   const wk = weekKey();
   if (guildRow.week === wk) return guildRow;
+  // SQLite đọc giá trị cũ của cột trong cùng câu UPDATE, nên boss_hp phải tự tính lại max mới.
   await db.batch([
     db.prepare(`UPDATE guilds SET week=?2,
       boss_max_hp=MAX(?4,?4*(SELECT COUNT(*) FROM guild_members WHERE guild_id=?1)),
-      boss_hp=boss_max_hp,updated_at=?3 WHERE id=?1 AND week<>?2`)
+      boss_hp=MAX(?4,?4*(SELECT COUNT(*) FROM guild_members WHERE guild_id=?1)),updated_at=?3 WHERE id=?1 AND week<>?2`)
       .bind(guildRow.id, wk, Date.now(), GUILD_BOSS_RULES.hpPerMember),
     db.prepare("UPDATE guild_members SET weekly_damage=0,attack_day=NULL,attack_count=0 WHERE guild_id=?1 AND changes()>0").bind(guildRow.id),
   ]);

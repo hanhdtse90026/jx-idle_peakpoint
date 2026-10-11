@@ -100,15 +100,30 @@ test("SQLite: boss concurrent quota and receipt retry preserve damage once",asyn
   assert.equal((await DB.prepare("SELECT attack_count FROM guild_members").first()).attack_count,3);
 });
 
-test("SQLite: boss overkill clips useful damage and week/day reset is not repeated",async t=>{
+test("SQLite: boss overkill clips useful damage to the remaining HP",async t=>{
+  const {env,DB,players:[p,q]}=await fixture(t);
+  await guild(p.request(),env,{action:"create",name:"Overkill Guild"});await guild(q.request(),env,{action:"join",name:"Overkill Guild"});
+  await DB.prepare("UPDATE guilds SET boss_hp=1,boss_max_hp=100 WHERE week=?1").bind(week()).run();
+  const r=await concurrent([p,q].map(player=>()=>guild(player.request(),env,{action:"boss_attack",request_id:"overkill_attack_"+player.id})));
+  assert.equal(successes(r).length,1);
+  assert.equal((await DB.prepare("SELECT boss_hp FROM guilds").first()).boss_hp,0);
+  const totals=await DB.prepare("SELECT SUM(weekly_damage) AS damage,SUM(attack_count) AS attacks FROM guild_members").first();
+  assert.equal(totals.damage,1);assert.equal(totals.attacks,1);
+});
+
+test("SQLite: weekly boss reset starts at the new max once and the day quota resets",async t=>{
   const {env,DB,players:[p,q]}=await fixture(t);
   await guild(p.request(),env,{action:"create",name:"Reset Guild"});await guild(q.request(),env,{action:"join",name:"Reset Guild"});
   await DB.prepare("UPDATE guilds SET week='old',boss_hp=1,boss_max_hp=100").run();
   await DB.prepare("UPDATE guild_members SET attack_day='old',attack_count=3,weekly_damage=50").run();
-  const r=await concurrent([p,q].map(player=>()=>guild(player.request(),env,{action:"boss_attack",request_id:"reset_attack_"+player.id})));
-  assert.equal(successes(r).length,1);
-  assert.equal((await DB.prepare("SELECT boss_hp FROM guilds").first()).boss_hp,0);
-  assert.equal((await DB.prepare("SELECT SUM(weekly_damage) AS damage,SUM(attack_count) AS attacks FROM guild_members").first()).damage,100);
+  const first=await guild(p.request(),env,{action:"boss_attack",request_id:"reset_attack_"+p.id});
+  const afterReset=await DB.prepare("SELECT boss_max_hp,boss_hp FROM guilds").first();
+  assert.equal(afterReset.boss_max_hp,30000);
+  assert.equal(afterReset.boss_hp,30000-first.damage);
+  const pMember=await DB.prepare("SELECT attack_count,weekly_damage FROM guild_members WHERE account_id=?1").bind(p.id).first();
+  assert.equal(pMember.attack_count,1);assert.equal(pMember.weekly_damage,first.damage);
+  const second=await guild(q.request(),env,{action:"boss_attack",request_id:"reset_attack_"+q.id});
+  assert.equal((await DB.prepare("SELECT boss_hp FROM guilds").first()).boss_hp,30000-first.damage-second.damage);
   await DB.prepare("UPDATE guilds SET boss_hp=10000").run();
   await DB.prepare("UPDATE guild_members SET attack_day='yesterday',attack_count=3").run();
   await guild(p.request(),env,{action:"boss_attack",request_id:"next_day_attack"});
